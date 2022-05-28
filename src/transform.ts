@@ -1,3 +1,4 @@
+/* eslint-disable prefer-template */
 import * as core from '@actions/core'
 import {
   Category,
@@ -84,18 +85,23 @@ export function buildChangelog(
 
   // bring PRs into the order of categories
   const categorized = new Map<Category, string[]>()
+  const unreleasedCategorized = new Map<Category, string[]>()
   const categories = config.categories || DefaultConfiguration.categories
   const ignoredLabels =
     config.ignore_labels || DefaultConfiguration.ignore_labels
 
   for (const category of categories) {
     categorized.set(category, [])
+    unreleasedCategorized.set(category, [])
   }
 
   const categorizedPrs: string[] = []
+  const unreleasedCategorizedPrs: string[] = []
   const ignoredPrs: string[] = []
+  const unreleasedIgnoredPrs: string[] = []
   const openPrs: string[] = []
   const uncategorizedPrs: string[] = []
+  const unreleasedUncategorizedPrs: string[] = []
 
   // bring elements in order
   for (const [pr, body] of transformedMap) {
@@ -105,7 +111,22 @@ export function buildChangelog(
         pr.labels
       )
     ) {
+      if (pr.isUnreleased) {
+        unreleasedIgnoredPrs.push(body)
+        continue
+      }
       ignoredPrs.push(body)
+      continue
+    }
+
+    if (pr.isUnreleased) {
+      categorize(
+        pr,
+        body,
+        unreleasedCategorized,
+        unreleasedUncategorizedPrs,
+        unreleasedCategorizedPrs
+      )
       continue
     }
 
@@ -113,67 +134,111 @@ export function buildChangelog(
       openPrs.push(body)
     }
 
-    let matched = false
-    for (const [category, pullRequests] of categorized) {
-      // check if any exclude label matches
-      if (category.exclude_labels !== undefined) {
-        if (
-          haveCommonElements(
-            category.exclude_labels.map(lbl => lbl.toLocaleLowerCase('en')),
-            pr.labels
-          )
-        ) {
-          if (core.isDebug()) {
-            const prNum = pr.number
-            const prLabels = pr.labels
-            const excludeLabels = JSON.stringify(category.exclude_labels)
-            core.debug(
-              `PR ${prNum} with labels: ${prLabels} excluded from category via exclude label: ${excludeLabels}`
-            )
-          }
-          continue // one of the exclude labels matched, skip the PR for this category
-        }
-      }
-
-      if (category.exhaustive === true) {
-        if (
-          haveEveryElements(
-            category.labels.map(lbl => lbl.toLocaleLowerCase('en')),
-            pr.labels
-          )
-        ) {
-          pullRequests.push(body)
-          matched = true
-        }
-      } else {
-        if (
-          haveCommonElements(
-            category.labels.map(lbl => lbl.toLocaleLowerCase('en')),
-            pr.labels
-          )
-        ) {
-          pullRequests.push(body)
-          matched = true
-        }
-      }
-    }
-
-    if (!matched) {
-      // we allow to have pull requests included in an "uncategorized" category
-      for (const [category, pullRequests] of categorized) {
-        if (category.labels.length === 0) {
-          pullRequests.push(body)
-          break
-        }
-      }
-
-      uncategorizedPrs.push(body)
-    } else {
-      categorizedPrs.push(body)
-    }
+    categorize(pr, body, categorized, uncategorizedPrs, categorizedPrs)
   }
   core.info(`ℹ️ Ordered all pull requests into ${categories.length} categories`)
 
+  const releasedChangelog = createChangelog(
+    config.template,
+    categorized,
+    uncategorizedPrs,
+    categorizedPrs,
+    ignoredPrs,
+    openPrs,
+    ''
+  )
+  const unreleasedChangelog = createChangelog(
+    config.template,
+    unreleasedCategorized,
+    unreleasedUncategorizedPrs,
+    unreleasedCategorizedPrs,
+    unreleasedIgnoredPrs,
+    [],
+    'UNRELEASED_'
+  )
+  let changelog = `${unreleasedChangelog}\n${releasedChangelog}`
+  changelog = fillAdditionalPlaceholders(changelog, options)
+
+  core.info(`ℹ️ Filled template`)
+  return changelog
+}
+
+function categorize(
+  pr: PullRequestInfo,
+  body: string,
+  categorized: Map<Category, string[]>,
+  uncategorizedPrs: string[],
+  categorizedPrs: string[]
+): void {
+  let matched = false
+  for (const [category, pullRequests] of categorized) {
+    // check if any exclude label matches
+    if (category.exclude_labels !== undefined) {
+      if (
+        haveCommonElements(
+          category.exclude_labels.map(lbl => lbl.toLocaleLowerCase('en')),
+          pr.labels
+        )
+      ) {
+        if (core.isDebug()) {
+          const prNum = pr.number
+          const prLabels = pr.labels
+          const excludeLabels = JSON.stringify(category.exclude_labels)
+          core.debug(
+            `PR ${prNum} with labels: ${prLabels} excluded from category via exclude label: ${excludeLabels}`
+          )
+        }
+        continue // one of the exclude labels matched, skip the PR for this category
+      }
+    }
+
+    if (category.exhaustive === true) {
+      if (
+        haveEveryElements(
+          category.labels.map(lbl => lbl.toLocaleLowerCase('en')),
+          pr.labels
+        )
+      ) {
+        pullRequests.push(body)
+        matched = true
+      }
+    } else {
+      if (
+        haveCommonElements(
+          category.labels.map(lbl => lbl.toLocaleLowerCase('en')),
+          pr.labels
+        )
+      ) {
+        pullRequests.push(body)
+        matched = true
+      }
+    }
+  }
+
+  if (!matched) {
+    // we allow to have pull requests included in an "uncategorized" category
+    for (const [category, pullRequests] of categorized) {
+      if (category.labels.length === 0) {
+        pullRequests.push(body)
+        break
+      }
+    }
+
+    uncategorizedPrs.push(body)
+  } else {
+    categorizedPrs.push(body)
+  }
+}
+
+function createChangelog(
+  template: string,
+  categorized: Map<Category, string[]>,
+  uncategorizedPrs: string[],
+  categorizedPrs: string[],
+  ignoredPrs: string[],
+  openPrs: string[],
+  templateVariablePrefix: string
+): string {
   // construct final changelog
   let changelog = ''
   for (const [category, pullRequests] of categorized) {
@@ -236,47 +301,42 @@ export function buildChangelog(
   core.info(`✒️ Wrote ${ignoredPrs.length} ignored pull requests down`)
 
   // fill template
-  let transformedChangelog = config.template || DefaultConfiguration.template
+  let transformedChangelog = template || DefaultConfiguration.template
   transformedChangelog = transformedChangelog.replace(
-    /\${{CHANGELOG}}/g,
+    new RegExp('\\${{' + templateVariablePrefix + 'CHANGELOG}}', 'g'),
     changelog
   )
   transformedChangelog = transformedChangelog.replace(
-    /\${{UNCATEGORIZED}}/g,
+    new RegExp('\\${{' + templateVariablePrefix + 'UNCATEGORIZED}}', 'g'),
     changelogUncategorized
   )
   transformedChangelog = transformedChangelog.replace(
-    /\${{OPEN}}/g,
+    new RegExp('\\${{' + templateVariablePrefix + 'OPEN}}', 'g'),
     changelogOpen
   )
   transformedChangelog = transformedChangelog.replace(
-    /\${{IGNORED}}/g,
+    new RegExp('\\${{' + templateVariablePrefix + 'IGNORED}}', 'g'),
     changelogIgnored
   )
 
   // fill other placeholders
   transformedChangelog = transformedChangelog.replace(
-    /\${{CATEGORIZED_COUNT}}/g,
+    new RegExp('\\${{' + templateVariablePrefix + 'CATEGORIZED_COUNT}}', 'g'),
     categorizedPrs.length.toString()
   )
   transformedChangelog = transformedChangelog.replace(
-    /\${{UNCATEGORIZED_COUNT}}/g,
+    new RegExp('\\${{' + templateVariablePrefix + 'UNCATEGORIZED_COUNT}}', 'g'),
     uncategorizedPrs.length.toString()
   )
   transformedChangelog = transformedChangelog.replace(
-    /\${{OPEN_COUNT}}/g,
+    new RegExp('\\${{' + templateVariablePrefix + 'OPEN_COUNT}}', 'g'),
     openPrs.length.toString()
   )
   transformedChangelog = transformedChangelog.replace(
-    /\${{IGNORED_COUNT}}/g,
+    new RegExp('\\${{' + templateVariablePrefix + 'IGNORED_COUNT}}', 'g'),
     ignoredPrs.length.toString()
   )
-  transformedChangelog = fillAdditionalPlaceholders(
-    transformedChangelog,
-    options
-  )
 
-  core.info(`ℹ️ Filled template`)
   return transformedChangelog
 }
 
