@@ -7,9 +7,10 @@ import {TagResolver} from './configuration'
 import {createCommandManager} from './gitHelper'
 import {RegexTransformer, validateTransformer} from './transform'
 
-export interface TagResult {
-  from: TagInfo | null
-  to: TagInfo | null
+export interface CompareRange {
+  from: string | null
+  to: string | null
+  toIsBranch: boolean
 }
 
 export interface TagInfo {
@@ -118,7 +119,7 @@ export class Tags {
     ignorePreReleases: boolean,
     maxTagsToFetch: number,
     tagResolver: TagResolver
-  ): Promise<TagResult> {
+  ): Promise<CompareRange> {
     // filter out tags not matching the specified filter
     const filteredTags = filterTags(
       // retrieve the tags from the API
@@ -150,7 +151,9 @@ export class Tags {
       })
     }
 
-    let resultToTag: TagInfo | null
+    // To can be either tag or branch
+    let resultTo: string | null
+    let resultToIsBranch = false
     let resultFromTag: TagInfo | null
 
     // ensure to resolve the toTag if it was not provided
@@ -161,15 +164,18 @@ export class Tags {
         core.info(
           `🔖 Resolved current tag (${toTag}) from the 'github.context.ref'`
         )
-        resultToTag = {
-          name: toTag,
-          commit: toTag
-        }
-      } else if (tags.length > 1) {
-        resultToTag = tags[0]
+        resultTo = toTag
+      }
+      if (github.context.ref?.startsWith('refs/heads/') === true) {
+        const toBranch = github.context.ref.replace('refs/heads/', '')
         core.info(
-          `🔖 Resolved current tag (${resultToTag.name}) from the tags git API`
+          `🔖 Resolved current branch (${toBranch}) from the 'github.context.ref'`
         )
+        resultTo = toBranch
+        resultToIsBranch = true
+      } else if (tags.length > 1) {
+        resultTo = tags[0].name
+        core.info(`🔖 Resolved current tag (${resultTo}) from the tags git API`)
       } else {
         // if not specified try to retrieve tag from git
         const gitHelper = await createCommandManager(repositoryPath)
@@ -177,31 +183,30 @@ export class Tags {
         core.info(
           `🔖 Resolved current tag (${latestTag}) from 'git rev-list --tags --skip=0 --max-count=1'`
         )
-        resultToTag = {
-          name: latestTag,
-          commit: latestTag
-        }
+        resultTo = latestTag
       }
     } else {
-      resultToTag = {
-        name: toTag,
-        commit: toTag
-      }
+      resultTo = toTag
     }
 
     // ensure toTag is specified
-    toTag = resultToTag.name
+    toTag = resultTo
 
     // resolve the fromTag if not defined
     if (!fromTag) {
       core.debug(`fromTag undefined, trying to resolve via API`)
 
-      resultFromTag = await this.findPredecessorTag(
-        tags,
-        repositoryPath,
-        toTag,
-        ignorePreReleases
-      )
+      if (resultToIsBranch && tags.length >= 1) {
+        resultFromTag = tags[0]
+        core.info(`🔖 Resolved current tag (${resultTo}) from the tags git API`)
+      } else {
+        resultFromTag = await this.findPredecessorTag(
+          tags,
+          repositoryPath,
+          toTag,
+          ignorePreReleases
+        )
+      }
 
       if (resultFromTag != null) {
         core.info(
@@ -216,8 +221,9 @@ export class Tags {
     }
 
     return {
-      from: resultFromTag,
-      to: resultToTag
+      from: resultFromTag?.name || null,
+      to: resultTo,
+      toIsBranch: resultToIsBranch
     }
   }
 }

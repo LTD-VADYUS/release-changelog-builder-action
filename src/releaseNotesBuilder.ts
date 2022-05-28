@@ -1,7 +1,7 @@
 import * as core from '@actions/core'
 import {Configuration, DefaultConfiguration} from './configuration'
 import {Octokit} from '@octokit/rest'
-import {ReleaseNotes} from './releaseNotes'
+import {ReleaseNotes, ReleaseNotesOptions} from './releaseNotes'
 import {Tags} from './tags'
 import {failOrError} from './utils'
 import {fillAdditionalPlaceholders} from './transform'
@@ -62,7 +62,7 @@ export class ReleaseNotesBuilder {
       this.configuration.tag_resolver || DefaultConfiguration.tag_resolver
     )
 
-    const thisTag = tagRange.to?.name
+    const thisTag = tagRange.to
     if (!thisTag) {
       failOrError(`💥 Missing or couldn't resolve 'toTag'`, this.failOnError)
       return null
@@ -72,7 +72,7 @@ export class ReleaseNotesBuilder {
       core.debug(`Resolved 'toTag' as ${thisTag}`)
     }
 
-    const previousTag = tagRange.from?.name
+    const previousTag = tagRange.from
     if (previousTag == null) {
       failOrError(
         `💥 Unable to retrieve previous tag given ${this.toTag}`,
@@ -85,11 +85,12 @@ export class ReleaseNotesBuilder {
     core.debug(`fromTag resolved via previousTag as: ${previousTag}`)
     core.endGroup()
 
-    const options = {
+    const options: ReleaseNotesOptions = {
       owner: this.owner,
       repo: this.repo,
       fromTag: this.fromTag,
-      toTag: this.toTag,
+      to: this.toTag,
+      resultToIsBranch: tagRange.toIsBranch,
       includeOpen: this.includeOpen,
       failOnError: this.failOnError,
       fetchReviewers: this.fetchReviewers,

@@ -10,7 +10,8 @@ export interface ReleaseNotesOptions {
   owner: string // the owner of the repository
   repo: string // the repository
   fromTag: string // the tag/ref to start from
-  toTag: string // the tag/ref up to
+  to: string // the tag or branch ref up to
+  resultToIsBranch: boolean // to is branch or tag
   includeOpen: boolean // defines if we should also fetch open pull requests
   failOnError: boolean // defines if we should fail the action in case of an error
   fetchReviewers: boolean // defines if the action should fetch the reviewers for PRs - approved reviewers are not included in the default PR listing
@@ -57,13 +58,13 @@ export class ReleaseNotes {
   }
 
   private async getCommitHistory(octokit: Octokit): Promise<CommitInfo[]> {
-    const {owner, repo, fromTag, toTag, failOnError} = this.options
-    core.info(`ℹ️ Comparing ${owner}/${repo} - '${fromTag}...${toTag}'`)
+    const {owner, repo, fromTag, to, failOnError} = this.options
+    core.info(`ℹ️ Comparing ${owner}/${repo} - '${fromTag}...${to}'`)
 
     const commitsApi = new Commits(octokit)
     let commits: CommitInfo[]
     try {
-      commits = await commitsApi.getDiff(owner, repo, fromTag, toTag)
+      commits = await commitsApi.getDiff(owner, repo, fromTag, to)
     } catch (error) {
       failOrError(
         `💥 Failed to retrieve - Invalid tag? - Because of: ${error}`,
@@ -72,7 +73,7 @@ export class ReleaseNotes {
       return []
     }
     if (commits.length === 0) {
-      core.warning(`⚠️ No commits found between - ${fromTag}...${toTag}`)
+      core.warning(`⚠️ No commits found between - ${fromTag}...${to}`)
       return []
     }
 
